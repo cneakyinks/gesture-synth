@@ -1,9 +1,18 @@
 import { HandLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+import { createTrailRenderer } from "./trails.js";
 
 // ---- DOM references ----
 const videoEl = document.getElementById("webcam");
 const canvasEl = document.getElementById("overlay");
 const ctx = canvasEl.getContext("2d");
+
+// Neon fingertip trails live on their own canvas layer
+const trailsCanvasEl = document.getElementById("trails");
+const trailRenderer = createTrailRenderer(trailsCanvasEl);
+
+// Landmark dots are purely visual (no gesture/audio logic reads them).
+// Hidden by default; set to true to bring them back for debugging.
+const SHOW_LANDMARK_DOTS = false;
 
 const gestureGuideEl = document.getElementById("gestureGuide");
 const guideToggleEl = document.getElementById("guideToggle");
@@ -749,6 +758,7 @@ function drawFrame(results, canvasWidth, canvasHeight) {
 
   ctx.drawImage(videoEl, sx, sy, sWidth, sHeight, 0, 0, canvasWidth, canvasHeight);
 
+  if (SHOW_LANDMARK_DOTS) {
   ctx.fillStyle = "#ffffff80";
   for (const landmarks of results.landmarks) {
     for (const point of landmarks) {
@@ -762,13 +772,27 @@ function drawFrame(results, canvasWidth, canvasHeight) {
       ctx.fill();
     }
   }
+  }
   ctx.restore();
+}
+
+// Maps a MediaPipe landmark to on-screen (mirrored) canvas pixels,
+// using the same cover-crop as drawFrame so trails line up with the video.
+function landmarkToScreen(point, canvasWidth, canvasHeight) {
+  const srcW = videoEl.videoWidth;
+  const srcH = videoEl.videoHeight;
+  const { sx, sy, sWidth, sHeight } = computeCoverRect(srcW, srcH, canvasWidth, canvasHeight);
+  const x = ((point.x * srcW - sx) / sWidth) * canvasWidth;
+  const y = ((point.y * srcH - sy) / sHeight) * canvasHeight;
+  return { x: canvasWidth - x, y }; // mirror to match the flipped video
 }
 
 // ---- Main loop ----
 function resizeCanvas() {
   canvasEl.width = window.innerWidth;
   canvasEl.height = window.innerHeight;
+  trailsCanvasEl.width = window.innerWidth;
+  trailsCanvasEl.height = window.innerHeight;
 }
 
 async function main() {
@@ -804,6 +828,16 @@ async function main() {
 
     cachedLeftLandmarks = null;
     cachedRightLandmarks = null;
+
+    if (videoEl.videoWidth && videoEl.videoHeight) {
+      trailRenderer.updateTargets(
+        results.landmarks.map((landmarks, i) => ({
+          handedness: results.handedness[i][0].categoryName,
+          landmarks,
+        })),
+        (point) => landmarkToScreen(point, trailsCanvasEl.width, trailsCanvasEl.height)
+      );
+    }
 
     results.landmarks.forEach((landmarks, i) => {
       const handedness = results.handedness[i][0].categoryName;
@@ -1114,6 +1148,8 @@ if (rawChord) {
     currentChord
   );
 
+
+  trailRenderer.render(timestampNow);
 
   requestAnimationFrame(loop);
 }
