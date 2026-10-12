@@ -16,7 +16,31 @@ const SHOW_LANDMARK_DOTS = false;
 
 const gestureGuideEl = document.getElementById("gestureGuide");
 const guideToggleEl = document.getElementById("guideToggle");
+const chordNameEl = document.getElementById("chordName");
+const chordNumeralEl = document.getElementById("chordNumeral");
 const chordDisplayEl = document.getElementById("chordDisplay");
+const modeSelectEl = document.getElementById("modeSelect");
+
+// ---- Chord quality follows the key ----
+// In a major key: I, IV, V are major; ii, iii, vi are minor; vii is diminished.
+const DIATONIC_QUALITY = { 1: "major", 2: "minor", 3: "minor", 4: "major", 5: "major", 6: "minor", 7: "dim" };
+// Left-hand tilt past this amount overrides the key: inward = major, outward = minor.
+const TILT_OVERRIDE = 0.25;
+// Volume used in Left Hand Only mode (no right hand to set it).
+const ONE_HAND_VOLUME = 0.7;
+
+// "G" + "minor" -> "Gm", "F#" + "dim" -> "F#°"
+function formatChordName(root, quality) {
+  if (quality === "minor") return root + "m";
+  if (quality === "dim") return root + "°";
+  return root;
+}
+
+// "II" + "minor" -> "ii", "VII" + "dim" -> "vii°"
+function formatNumeral(roman, quality) {
+  if (quality === "major") return roman.toUpperCase();
+  return roman.toLowerCase() + (quality === "dim" ? "°" : "");
+}
 const volumeBarEls = Array.from(document.querySelectorAll(".vol-bar"));
 const qualityDisplayEl = document.getElementById("qualityDisplay");
 const startOverlayEl = document.getElementById("startOverlay");
@@ -146,7 +170,7 @@ const SCALE_COLORS = {
   "VII": "100, 200, 250"  // 7th: Cyan
 };
 
-function drawEnergy(ctx, volume01, qualityIndex, tiltFactor, chordStr) {
+function drawEnergy(ctx, volume01, qualityIndex, tiltFactor, chordStr, centerY) {
   if (!ctx) return;
 
   // 1. QUALITY determines the number of lines (1: Major, 2: Minor, 3: Dominant, 4: Diminished)
@@ -154,8 +178,6 @@ function drawEnergy(ctx, volume01, qualityIndex, tiltFactor, chordStr) {
   const lineCount = qualityIndex; // 1 to 4 lines stacked or layered
 
   try {
-    // Center alignment point behind your absolute bottom HTML #chordDisplay text
-    const centerY = ctx.canvas.height - 56;
     const canvasWidth = ctx.canvas.width;
 
     // 2. VOLUME determines the thickness of the lines
@@ -174,8 +196,8 @@ function drawEnergy(ctx, volume01, qualityIndex, tiltFactor, chordStr) {
 
     if (chordStr && chordStr !== "--") {
       isChordActive = true;
-      const upperStr = chordStr.toUpperCase();
-      isMajor = (chordStr === upperStr);
+      const upperStr = chordStr.toUpperCase().replace("°", "");
+      isMajor = (chordStr === chordStr.toUpperCase());
 
       baseColorRGB = SCALE_COLORS[upperStr] || SCALE_COLORS.I;
     }
@@ -261,7 +283,7 @@ function sameChordState(a, b) {
 
   return (
     a.chord === b.chord &&
-    a.isMajorMode === b.isMajorMode &&
+    a.quality === b.quality &&
     a.qualityIndex === b.qualityIndex &&
     a.thumbDown === b.thumbDown
   );
@@ -410,7 +432,7 @@ function updateGestureGuide() {
     .map(({ degree, gesture }) => `
       <div class="gesture-guide-row">
         <span class="gesture-guide-note">
-          ${scale[degree - 1]}
+          ${formatChordName(scale[degree - 1], DIATONIC_QUALITY[degree])}
         </span>
 
         <span class="gesture-guide-gesture">
@@ -483,32 +505,15 @@ const NUMERAL_TO_DEGREE = {
 
 
 
-function getChordName(roman, isMajorMode) {
-
-  if (!roman || roman === "--") {
-    return "";
-  }
-
-  const degree =
-    NUMERAL_TO_DEGREE[roman.toUpperCase()];
-
-  if (!degree) {
-    return "";
-  }
-
-  const root =
-    MAJOR_SCALE[currentKeyName][degree - 1];
-
-
-  return isMajorMode
-    ? root
-    : root + "m";
-
+function getChordName(roman, quality) {
+  const degree = roman ? NUMERAL_TO_DEGREE[roman.toUpperCase()] : null;
+  if (!degree) return "";
+  return formatChordName(MAJOR_SCALE[currentKeyName][degree - 1], quality);
 }
 
 
 // Generate all fundamental raw intervals relative to the degree root
-function getChordTones(numeralStr, isMajorMode) {
+function getChordTones(numeralStr, quality) {
   if (!numeralStr || numeralStr === "--") return null;
 
   const degree = NUMERAL_TO_DEGREE[numeralStr.toUpperCase()];
@@ -517,7 +522,7 @@ function getChordTones(numeralStr, isMajorMode) {
   const root = getDegreeFreq(degree); 
 
   // Define scale intervals using precise semitone adjustments
-  const thirdSemitones = isMajorMode ? 4 : 3;
+  const thirdSemitones = quality === "major" ? 4 : 3;
   const fifthSemitones = 7; // Fixed perfect 5th for modes 1, 2, 3
 
   // Extension semitones (11 for Major 7th, 10 for Dominant 7, 9 for Diminished 7)
@@ -547,7 +552,7 @@ function getChordTones(numeralStr, isMajorMode) {
 }
 
 // Map the 4 right-hand finger variations depending entirely on the left-hand tilt mode
-function getSolidNotes(tones, rightHandCount, isMajorMode) {
+function getSolidNotes(tones, rightHandCount, quality) {
   if (!tones) return [];
   
   const { 
@@ -555,7 +560,20 @@ function getSolidNotes(tones, rightHandCount, isMajorMode) {
     maj7Tone, dom7Tone, dim7Tone, dim5Tone 
   } = tones;
 
-  if (isMajorMode) {
+  if (quality === "dim") {
+    switch (rightHandCount) {
+      case 2: // 1st inversion (minor third, diminished fifth, octave, octave minor third)
+        return [third, dim5Tone, octaveRoot, octaveThird];
+      case 3: // Half-diminished 7th (root, minor third, diminished fifth, minor 7th)
+        return [root, third, dim5Tone, dom7Tone];
+      case 4: // Diminished 7th
+        return [root, third, dim5Tone, dim7Tone];
+      default: // Diminished triad (root, minor third, diminished fifth, octave)
+        return [root, third, dim5Tone, octaveRoot];
+    }
+  }
+
+  if (quality === "major") {
     switch (rightHandCount) {
       case 1: // Major chord (root, fifth, octave, octave third)
         return [root, fifth, octaveRoot, octaveThird];
@@ -859,303 +877,139 @@ async function main() {
   // 2. RAW GESTURE STATES
   // ============================
 
-  let currentChord = null;
-  let isMajorMode = true;
+  const oneHanded = modeSelectEl.value === "left";
 
-  let qualityIndex = 0;
-  let thumbDown = false;
-
+  // Which hand picks the chord. In Left Hand Only mode, fall back to
+  // whichever single hand is visible, in case it is labelled "Right".
+  const chordHand = oneHanded
+    ? (cachedLeftLandmarks || cachedRightLandmarks)
+    : cachedLeftLandmarks;
+  const expressionHand = oneHanded ? null : cachedRightLandmarks;
 
   let rawChordState = null;
 
+  if (chordHand) {
+    const roman = classifyChord(chordHand, "Left");
+
+    if (roman) {
+      const chord = roman.toUpperCase();
+      const leftTilt = getHandHorizontalTilt(chordHand, "Left");
+
+      // Quality follows the key, unless the hand is clearly tilted
+      let quality = DIATONIC_QUALITY[NUMERAL_TO_DEGREE[chord]];
+      if (leftTilt > TILT_OVERRIDE) quality = "major";
+      else if (leftTilt < -TILT_OVERRIDE) quality = "minor";
+
+      rawChordState = {
+        chord,
+        quality,
+        // One-handed: always root position at normal octave
+        qualityIndex: oneHanded ? 1 : (expressionHand ? getRightHandQualityIndex(expressionHand) : 0),
+        thumbDown: oneHanded ? false : (expressionHand ? isThumbExtended(expressionHand, "Right") : false),
+      };
+    }
+  }
 
   // ============================
-// BUILD MUSICAL CHORD STATE
-// ============================
-
-let rawChord = null;
-let rawMode = true;
-let rawQualityIndex = 0;
-let rawThumbDown = false;
-
-
-// LEFT HAND = ROOT CHORD
-
-if (cachedLeftLandmarks) {
-
-  const leftTilt =
-    getHandHorizontalTilt(
-      cachedLeftLandmarks,
-      "Left"
-    );
-
-
-  rawChord =
-    classifyChord(
-      cachedLeftLandmarks,
-      "Left"
-    );
-
-
-  rawMode =
-    leftTilt >= 0;
-
-}
-
-
-// RIGHT HAND = VOICING
-
-if (cachedRightLandmarks) {
-
-  rawQualityIndex =
-    getRightHandQualityIndex(
-      cachedRightLandmarks
-    );
-
-
-  rawThumbDown =
-    isThumbExtended(
-      cachedRightLandmarks,
-      "Right"
-    );
-
-}
-
-
-// Combine into ONE musical object
-
-if (rawChord) {
-
-  rawChordState = {
-
-    chord: rawChord,
-
-    isMajorMode: rawMode,
-
-    qualityIndex: rawQualityIndex,
-
-    thumbDown: rawThumbDown
-
-  };
-
-}
-
-
-  // ============================
-  // 3. STABILIZE HANDS
+  // 3. STABILIZE
   // ============================
 
-  const stableChordState =
-  stabilizeChordState(
-    rawChordState,
-    timestampNow
-  );
+  const stableChordState = stabilizeChordState(rawChordState, timestampNow);
 
-
-  if (stableChordState) {
-
-  currentChord =
-    stableChordState.chord;
-
-
-  isMajorMode =
-    stableChordState.isMajorMode;
-
-
-  qualityIndex =
-    stableChordState.qualityIndex;
-
-
-  thumbDown =
-    stableChordState.thumbDown;
-
-}
-
+  const currentChord = stableChordState ? stableChordState.chord : null;
+  const quality = stableChordState ? stableChordState.quality : "major";
+  const qualityIndex = stableChordState ? stableChordState.qualityIndex : 0;
+  const thumbDown = stableChordState ? stableChordState.thumbDown : false;
+  const numeral = currentChord ? formatNumeral(currentChord, quality) : null;
 
   // ============================
   // 4. UI UPDATE
   // ============================
 
   if (currentChord) {
-  const chordName =
-    getChordName(
-      currentChord,
-      isMajorMode
-    );
-
-  chordDisplayEl.textContent =
-    `${chordName}(${currentChord})`;
+    chordNameEl.textContent = getChordName(currentChord, quality);
+    chordNumeralEl.textContent = numeral;
   } else {
-    chordDisplayEl.textContent = "--";
+    chordNameEl.textContent = "--";
+    chordNumeralEl.textContent = "";
   }
 
-
-  const MAJOR_LABELS = {
-    1: "Major",
-    2: "Major 1st Inv",
-    3: "Major 7th",
-    4: "Dominant 7th"
+  const VOICING_LABELS = {
+    major: { 1: "Major", 2: "Major 1st Inv", 3: "Major 7th", 4: "Dominant 7th" },
+    minor: { 1: "Minor", 2: "Minor 1st Inv", 3: "Minor 7th", 4: "Diminished 7th" },
+    dim:   { 1: "Diminished", 2: "Diminished 1st Inv", 3: "Half-Dim 7th", 4: "Diminished 7th" },
   };
 
-
-  const MINOR_LABELS = {
-    1: "Minor",
-    2: "Minor 1st Inv",
-    3: "Minor 7th",
-    4: "Diminished 7th"
-  };
-
-
-  const activeLabel =
-    isMajorMode
-      ? MAJOR_LABELS[qualityIndex]
-      : MINOR_LABELS[qualityIndex];
-
+  const activeLabel = currentChord ? VOICING_LABELS[quality][qualityIndex] : null;
 
   qualityDisplayEl.textContent =
     activeLabel
       ? `${activeLabel}${thumbDown ? " (-8ve)" : ""}`
       : "--";
 
-
-
   // ============================
   // 5. AUDIO ENGINE
   // ============================
 
-  if (cachedRightLandmarks) {
+  const distortionEl = document.getElementById("distortionDisplay");
 
-    const currentVolume =
-      getVolumeFromHeight(
-        cachedRightLandmarks
-      );
+  let volume = 0;
+  let tilt = 0;
 
-
-    updateVolumeMeter(currentVolume);
-
-
-    const horizontalTilt =
-      getHandHorizontalTilt(
-        cachedRightLandmarks,
-        "Right"
-      );
-
-
-    const tiltPercentage =
-      Math.round(horizontalTilt * 100);
-
-
-    const targetEl =
-      document.getElementById(
-        "distortionDisplay"
-      );
-
-
-    if (targetEl) {
-
-      targetEl.textContent =
-        `Filter: ${tiltPercentage > 0 ? "+" : ""}${tiltPercentage}%`;
-
-    }
-
-
-    synth.updateFilterSweep(
-      horizontalTilt
-    );
-
-
-    if (
-      currentChord &&
-      qualityIndex >= 1
-    ) {
-
-      const chordTrackingKey =
-        `${currentChord}-${isMajorMode ? "major" : "minor"}-${qualityIndex}-${thumbDown ? "low" : "normal"}`;
-
-      if (chordTrackingKey !== lastTrackedChord) {
-        lastTrackedChord = chordTrackingKey;
-        trackClarityEvent("chord_changed");
-      }
-
-      const tones =
-        getChordTones(
-          currentChord,
-          isMajorMode
-        );
-
-
-      let notes =
-        getSolidNotes(
-          tones,
-          qualityIndex,
-          isMajorMode
-        );
-
-
-      if (thumbDown) {
-        notes =
-          notes.map(
-            freq => freq / 2
-          );
-      }
-
-
-      synth.playNotes(notes);
-      synth.setVolume(
-        currentVolume
-      );
-
-
-    } else {
-
-      synth.setVolume(0);
-
-    }
-
-
-  } else {
-
-    synth.setVolume(0);
-
+  if (oneHanded) {
+    volume = chordHand ? ONE_HAND_VOLUME : 0;
+  } else if (expressionHand) {
+    volume = getVolumeFromHeight(expressionHand);
+    tilt = getHandHorizontalTilt(expressionHand, "Right");
   }
 
+  if (oneHanded || expressionHand) {
+    updateVolumeMeter(volume);
+    synth.updateFilterSweep(tilt);
 
+    if (distortionEl) {
+      const tiltPercentage = Math.round(tilt * 100);
+      distortionEl.textContent = `Filter: ${tiltPercentage > 0 ? "+" : ""}${tiltPercentage}%`;
+    }
+  }
+
+  if (currentChord && qualityIndex >= 1 && volume > 0) {
+    const chordTrackingKey =
+      `${currentChord}-${quality}-${qualityIndex}-${thumbDown ? "low" : "normal"}`;
+
+    if (chordTrackingKey !== lastTrackedChord) {
+      lastTrackedChord = chordTrackingKey;
+      trackClarityEvent("chord_changed");
+    }
+
+    const tones = getChordTones(currentChord, quality);
+    let notes = getSolidNotes(tones, qualityIndex, quality);
+
+    if (thumbDown) {
+      notes = notes.map((freq) => freq / 2);
+    }
+
+    synth.playNotes(notes);
+    synth.setVolume(volume);
+  } else {
+    synth.setVolume(0);
+  }
 
   // ============================
   // 6. VISUAL ENERGY
   // ============================
 
-  const volume =
-    cachedRightLandmarks
-      ? getVolumeFromHeight(
-          cachedRightLandmarks
-        )
-      : 0;
+  // Keep the wave ribbon fully above the chord text (its swing is about +/-60px)
+  const chordTop = chordDisplayEl.getBoundingClientRect().top;
+  const ribbonCenterY = chordTop - 70;
 
+  drawEnergy(ctx, volume, qualityIndex, tilt, numeral, ribbonCenterY);
 
-  const tilt =
-    cachedRightLandmarks
-      ? getHandHorizontalTilt(
-          cachedRightLandmarks,
-          "Right"
-        )
-      : 0;
-
-
-  drawEnergy(
-    ctx,
-    volume,
-    qualityIndex,
-    tilt,
-    currentChord
-  );
-
-
-  // Trails take the chord's colour (dimmer in minor, like the ribbon)
-  const chordRGB = currentChord ? SCALE_COLORS[currentChord.toUpperCase()] : null;
+  // Trails take the chord's colour (dimmer when not major, like the ribbon)
+  const chordRGB = currentChord ? SCALE_COLORS[currentChord] : null;
   trailRenderer.setColor(
     chordRGB
-      ? chordRGB.split(",").map((c) => Number(c) * (isMajorMode ? 1 : 0.75))
+      ? chordRGB.split(",").map((c) => Number(c) * (quality === "major" ? 1 : 0.75))
       : null
   );
   trailRenderer.render(timestampNow);
