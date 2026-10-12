@@ -135,6 +135,17 @@ function getHandHorizontalTilt(landmarks, handedness) {
   }
 }
 
+// Colour per scale degree. Shared by the wave ribbon and the fingertip trails.
+const SCALE_COLORS = {
+  "I":   "232, 161, 61",  // Tonic: Golden Sunset
+  "II":  "210, 50, 120",  // 2nd: Purple-Red
+  "III": "180, 40, 150",  // 3rd: Deep Violet/Magenta alternative
+  "IV":  "240, 210, 40",  // 4th: Yellow
+  "V":   "245, 120, 30",  // 5th: Orange
+  "VI":  "230, 40, 40",   // 6th: Red
+  "VII": "100, 200, 250"  // 7th: Cyan
+};
+
 function drawEnergy(ctx, volume01, qualityIndex, tiltFactor, chordStr) {
   if (!ctx) return;
 
@@ -166,16 +177,7 @@ function drawEnergy(ctx, volume01, qualityIndex, tiltFactor, chordStr) {
       const upperStr = chordStr.toUpperCase();
       isMajor = (chordStr === upperStr);
 
-      const SCALE_COLORS = {
-        "I":   "232, 161, 61",  // Tonic: Golden Sunset
-        "II":  "210, 50, 120",  // 2nd: Purple-Red
-        "III": "180, 40, 150",  // 3rd: Deep Violet/Magenta alternative
-        "IV":  "240, 210, 40",  // 4th: Yellow
-        "V":   "245, 120, 30",  // 5th: Orange
-        "VI":  "230, 40, 40",    // 6th: Red
-        "VII": "100, 200, 250"   // 7th: Cyan
-      };
-      baseColorRGB = SCALE_COLORS[upperStr] || "232, 161, 61";
+      baseColorRGB = SCALE_COLORS[upperStr] || SCALE_COLORS.I;
     }
 
 
@@ -1149,6 +1151,13 @@ if (rawChord) {
   );
 
 
+  // Trails take the chord's colour (dimmer in minor, like the ribbon)
+  const chordRGB = currentChord ? SCALE_COLORS[currentChord.toUpperCase()] : null;
+  trailRenderer.setColor(
+    chordRGB
+      ? chordRGB.split(",").map((c) => Number(c) * (isMajorMode ? 1 : 0.75))
+      : null
+  );
   trailRenderer.render(timestampNow);
 
   requestAnimationFrame(loop);
